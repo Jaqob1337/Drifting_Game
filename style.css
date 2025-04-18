@@ -1,0 +1,72 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden; /* Prevent scrolling */
+    background-color: #333;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: sans-serif;
+}
+
+#game-container {
+    position: relative;
+    /* Adjust size as needed, maybe make it aspect-ratio controlled */
+    width: 90vmin;
+    height: 70vmin;
+    max-width: 800px;
+    max-height: 600px;
+    background-color: #ddd; /* Fallback if canvas is transparent */
+    border: 2px solid #555;
+    cursor: pointer; /* Indicate interactivity */
+    touch-action: none; /* Disable default touch actions like pinch-zoom */
+    -webkit-user-select: none; /* Disable text selection */
+    -ms-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent; /* Disable tap highlight on mobile */
+
+}
+
+#game-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background-color: #6a6a6a; /* Asphalt color */
+}
+
+#ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 1.5em;
+}
+
+#message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    background-color: rgba(0, 0, 0, 0.7);
+    padding: 15px 25px;
+    border-radius: 10px;
+    font-size: 1.8em;
+    text-align: center;
+    pointer-events: none; /* Message shouldn't block clicks/taps */
+    opacity: 1;
+    transition: opacity 0.5s ease-out;
+}
+
+#message.hidden {
+    opacity: 0;
+}
