@@ -2,19 +2,832 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Simple Web Drift Game</title>
-    <link rel="stylesheet" href="style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Car Drifting Game Prototype</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            background-color: #333;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            max-height: 700px;
+            aspect-ratio: 5/7;
+            margin: 0 auto;
+            border: 2px solid #666;
+            overflow: hidden;
+            background-color: #222;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            touch-action: none;
+        }
+        
+        canvas {
+            display: block;
+            background-color: #444;
+            touch-action: none;
+        }
+        
+        #instructions {
+            color: white;
+            text-align: center;
+            margin: 10px;
+            padding: 5px;
+            font-size: 14px;
+            max-width: 500px;
+        }
+        
+        #score {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+        
+        #debugInfo {
+            position: absolute;
+            top: 40px;
+            right: 10px;
+            color: #aaa;
+            font-size: 12px;
+            text-align: right;
+        }
+    </style>
 </head>
 <body>
-    <div id="game-container">
-        <canvas id="game-canvas"></canvas>
-        <div id="ui">
-            <p>Score: <span id="score">0</span></p>
-        </div>
-        <div id="message">Tap Left/Right to Steer</div>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="score">DRIFT: 0</div>
+        <div id="debugInfo"></div>
+    </div>
+    <div id="instructions">
+        <p>Swipe to drive | Hold finger to drift | Two-finger touch to brake</p>
     </div>
 
-    <script src="script.js"></script>
+    <script>
+        document.addEventListener('contextmenu', event => event.preventDefault());
+        
+        // Game setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const debugInfo = document.getElementById('debugInfo');
+        
+        // Set canvas to fill the container
+        function resizeCanvas() {
+            const container = document.getElementById('gameContainer');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        
+        // Game variables
+        let score = 0;
+        const CAR_WIDTH = canvas.width * 0.06;
+        const CAR_HEIGHT = canvas.width * 0.1;
+        const FRICTION = 0.98;
+        const DRIFT_FRICTION = 0.97;
+        const TURN_SPEED = 0.06;
+        const DRIFT_TURN_SPEED = 0.08;
+        
+        // Car state
+        const car = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            velocity: 0,
+            maxVelocity: 5,
+            acceleration: 0.15,
+            rotation: 0, // Angle in radians
+            drifting: false,
+            driftFactor: 0, // 0-1 for drift intensity
+            lateralVelocity: 0, // Side slip
+            color: '#ff4444',
+            trail: [], // Tire tracks
+            smoke: [], // Drift smoke particles
+            colliding: false
+        };
+        
+        // Building layout for city
+        const buildings = [];
+        const BUILDING_COUNT = 15;
+        const ROAD_WIDTH = canvas.width * 0.18;
+        
+        function generateBuildings() {
+            buildings.length = 0;
+            
+            // Create a grid of buildings with roads in between
+            const buildingSizes = [
+                {w: 0.15, h: 0.15, color: '#555555'},
+                {w: 0.2, h: 0.1, color: '#444444'},
+                {w: 0.1, h: 0.2, color: '#666666'},
+                {w: 0.25, h: 0.25, color: '#333333'}
+            ];
+            
+            // Create roads and intersections first
+            const gridSize = 3;
+            const cellWidth = canvas.width / gridSize;
+            const cellHeight = canvas.height / gridSize;
+            
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    if (Math.random() > 0.2) { // 80% chance of placing a building
+                        const buildingType = buildingSizes[Math.floor(Math.random() * buildingSizes.length)];
+                        const buildingWidth = cellWidth * buildingType.w;
+                        const buildingHeight = cellHeight * buildingType.h;
+                        
+                        // Position building within the cell, but not on roads
+                        const padding = ROAD_WIDTH / 2;
+                        const offsetX = Math.random() * (cellWidth - buildingWidth - 2 * padding) + padding;
+                        const offsetY = Math.random() * (cellHeight - buildingHeight - 2 * padding) + padding;
+                        
+                        buildings.push({
+                            x: i * cellWidth + offsetX,
+                            y: j * cellHeight + offsetY,
+                            width: buildingWidth,
+                            height: buildingHeight,
+                            color: buildingType.color,
+                            windows: []
+                        });
+                        
+                        // Add windows to the building
+                        const windowSize = Math.min(buildingWidth, buildingHeight) * 0.15;
+                        const windowsPerRow = Math.floor(buildingWidth / (windowSize * 1.5));
+                        const windowsPerCol = Math.floor(buildingHeight / (windowSize * 1.5));
+                        
+                        for (let wi = 0; wi < windowsPerRow; wi++) {
+                            for (let wj = 0; wj < windowsPerCol; wj++) {
+                                buildings[buildings.length - 1].windows.push({
+                                    x: wi * windowSize * 1.5 + windowSize / 2,
+                                    y: wj * windowSize * 1.5 + windowSize / 2,
+                                    size: windowSize,
+                                    lit: Math.random() > 0.3 // Some windows are lit
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Touch controls
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let isTouching = false;
+        let isDrifting = false;
+        let isBraking = false;
+        let touchCount = 0;
+        
+        canvas.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            touchCount = e.touches.length;
+            
+            if (touchCount === 1) {
+                const touch = e.touches[0];
+                touchStartX = touch.clientX;
+                touchStartY = touch.clientY;
+                isTouching = true;
+            } else if (touchCount === 2) {
+                // Two-finger touch for braking
+                isBraking = true;
+            }
+        });
+        
+        canvas.addEventListener('touchmove', function(e) {
+            e.preventDefault();
+            touchCount = e.touches.length;
+            
+            if (touchCount === 1 && isTouching) {
+                const touch = e.touches[0];
+                const deltaX = touch.clientX - touchStartX;
+                const deltaY = touch.clientY - touchStartY;
+                
+                // Control car based on touch distance from start
+                const touchDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+                
+                // More natural drifting - based on speed and touch distance
+                if (touchDistance > 40 && car.velocity > 2) {
+                    isDrifting = true;
+                    car.drifting = true;
+                } else {
+                    isDrifting = false;
+                    car.drifting = false;
+                }
+                
+                // Determine direction based on touch movement
+                let touchAngle = Math.atan2(deltaY, deltaX);
+                
+                // Convert to match our car's coordinate system (0 = up, clockwise)
+                touchAngle = touchAngle + Math.PI / 2;
+                
+                // Only adjust angle if we're moving
+                if (car.velocity > 0.5) {
+                    // Calculate the difference between current car angle and touch angle
+                    let angleDiff = (touchAngle - car.rotation) % (Math.PI * 2);
+                    
+                    // Normalize to between -PI and PI
+                    if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                    if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                    
+                    // Turn car based on angle difference
+                    if (Math.abs(angleDiff) > 0.05) {
+                        // Smoother turning - limit max turn per frame
+                        const turnAmount = Math.min(
+                            Math.abs(angleDiff), 
+                            isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED
+                        ) * Math.sign(angleDiff);
+                        
+                        car.rotation += turnAmount;
+                    }
+                }
+                
+                // Smoother acceleration
+                if (touchDistance > 10) {
+                    car.velocity = Math.min(
+                        car.maxVelocity, 
+                        car.velocity + car.acceleration * Math.min(1, touchDistance / 120)
+                    );
+                }
+            }
+        });
+        
+        canvas.addEventListener('touchend', function(e) {
+            touchCount = e.touches.length;
+            
+            if (touchCount === 0) {
+                isTouching = false;
+                isDrifting = false;
+                isBraking = false;
+                car.drifting = false;
+            }
+        });
+        
+        // Mouse controls for testing on desktop
+        let isMouseDown = false;
+        
+        canvas.addEventListener('mousedown', function(e) {
+            if (e.button === 0) { // Left mouse button only
+                isMouseDown = true;
+                touchStartX = e.clientX;
+                touchStartY = e.clientY;
+                isTouching = true;
+            } else if (e.button === 2) { // Right click for braking
+                isBraking = true;
+            }
+        });
+        
+        canvas.addEventListener('mousemove', function(e) {
+            if (!isMouseDown) return;
+            
+            const deltaX = e.clientX - touchStartX;
+            const deltaY = e.clientY - touchStartY;
+            
+            // Use improved touch control logic for mouse as well
+            const mouseDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            // More natural drifting - based on speed and mouse distance
+            if (mouseDistance > 40 && car.velocity > 2) {
+                isDrifting = true;
+                car.drifting = true;
+            } else {
+                isDrifting = false;
+                car.drifting = false;
+            }
+            
+            let mouseAngle = Math.atan2(deltaY, deltaX);
+            mouseAngle = mouseAngle + Math.PI / 2;
+            
+            // Only adjust angle if we're moving
+            if (car.velocity > 0.5) {
+                let angleDiff = (mouseAngle - car.rotation) % (Math.PI * 2);
+                if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                
+                if (Math.abs(angleDiff) > 0.05) {
+                    // Smoother turning - limit max turn per frame
+                    const turnAmount = Math.min(
+                        Math.abs(angleDiff), 
+                        isDrifting ? DRIFT_TURN_SPEED : TURN_SPEED
+                    ) * Math.sign(angleDiff);
+                    
+                    car.rotation += turnAmount;
+                }
+            }
+            
+            // Smoother acceleration
+            if (mouseDistance > 10) {
+                car.velocity = Math.min(
+                    car.maxVelocity, 
+                    car.velocity + car.acceleration * Math.min(1, mouseDistance / 120)
+                );
+            }
+        });
+        
+        canvas.addEventListener('mouseup', function() {
+            isMouseDown = false;
+            isTouching = false;
+            isDrifting = false;
+            car.drifting = false;
+        });
+        
+        // Game loop
+        function update() {
+            // Apply friction
+            if (isBraking) {
+                car.velocity *= 0.9; // Stronger braking
+            } else if (car.drifting) {
+                car.velocity *= DRIFT_FRICTION;
+                car.driftFactor = Math.min(1, car.driftFactor + 0.05);
+                
+                // Add lateral velocity when drifting
+                car.lateralVelocity = car.velocity * 0.5 * car.driftFactor;
+                
+                // Add drift smoke
+                if (car.velocity > 2 && Math.random() > 0.6) {
+                    car.smoke.push({
+                        x: car.x - Math.cos(car.rotation) * (CAR_HEIGHT/2),
+                        y: car.y - Math.sin(car.rotation) * (CAR_HEIGHT/2),
+                        size: Math.random() * 8 + 4,
+                        opacity: 0.7,
+                        life: 20
+                    });
+                }
+                
+                // Add to score when drifting
+                if (car.velocity > 2) {
+                    score += Math.floor(car.velocity * car.driftFactor);
+                    scoreElement.textContent = 'DRIFT: ' + score;
+                }
+                
+                // Add tire tracks when drifting
+                if (car.velocity > 1.5 && car.trail.length < 200) {
+                    car.trail.push({
+                        x: car.x - Math.cos(car.rotation) * (CAR_HEIGHT/2),
+                        y: car.y - Math.sin(car.rotation) * (CAR_HEIGHT/2),
+                        opacity: 0.7,
+                        width: 2
+                    });
+                    
+                    // Also add track for the other wheel
+                    const wheelOffset = CAR_WIDTH * 0.7;
+                    const perpAngle = car.rotation + Math.PI/2;
+                    car.trail.push({
+                        x: car.x - Math.cos(car.rotation) * (CAR_HEIGHT/2) + Math.cos(perpAngle) * wheelOffset,
+                        y: car.y - Math.sin(car.rotation) * (CAR_HEIGHT/2) + Math.sin(perpAngle) * wheelOffset,
+                        opacity: 0.7,
+                        width: 2
+                    });
+                }
+            } else {
+                car.velocity *= FRICTION;
+                car.driftFactor = Math.max(0, car.driftFactor - 0.1);
+                car.lateralVelocity = car.lateralVelocity * 0.8;
+            }
+            
+            // Move the car
+            const moveAngle = car.drifting ? 
+                car.rotation + Math.atan2(car.lateralVelocity, car.velocity) : 
+                car.rotation;
+                
+            const totalVelocity = car.drifting ? 
+                Math.sqrt(car.velocity * car.velocity + car.lateralVelocity * car.lateralVelocity) : 
+                car.velocity;
+                
+            car.x += Math.sin(moveAngle) * totalVelocity;
+            car.y -= Math.cos(moveAngle) * totalVelocity;
+            
+            // Debug info
+            debugInfo.textContent = `Speed: ${car.velocity.toFixed(2)} 
+                                    Drift: ${car.driftFactor.toFixed(2)}
+                                    Angle: ${(car.rotation * 180 / Math.PI).toFixed(0)}°`;
+            
+            // Boundary check
+            if (car.x < 0) car.x = 0;
+            if (car.x > canvas.width) car.x = canvas.width;
+            if (car.y < 0) car.y = 0;
+            if (car.y > canvas.height) car.y = canvas.height;
+            
+            // Check for collisions with buildings
+            if (!car.colliding) {
+                for (let i = 0; i < buildings.length; i++) {
+                    const building = buildings[i];
+                    
+                    // Improved collision with smaller hitbox
+                    const carHitboxWidth = CAR_WIDTH * 0.8;
+                    const carHitboxHeight = CAR_HEIGHT * 0.8;
+                    
+                    // Simple AABB collision
+                    if (car.x + carHitboxWidth/2 > building.x && 
+                        car.x - carHitboxWidth/2 < building.x + building.width &&
+                        car.y + carHitboxHeight/2 > building.y && 
+                        car.y - carHitboxHeight/2 < building.y + building.height) {
+                        
+                        // Find collision normal
+                        const overlapLeft = (car.x + carHitboxWidth/2) - building.x;
+                        const overlapRight = (building.x + building.width) - (car.x - carHitboxWidth/2);
+                        const overlapTop = (car.y + carHitboxHeight/2) - building.y;
+                        const overlapBottom = (building.y + building.height) - (car.y - carHitboxHeight/2);
+                        
+                        // Find smallest overlap
+                        const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+                        
+                        // Push car out of building based on smallest overlap
+                        if (minOverlap === overlapLeft) {
+                            car.x = building.x - carHitboxWidth/2;
+                        } else if (minOverlap === overlapRight) {
+                            car.x = building.x + building.width + carHitboxWidth/2;
+                        } else if (minOverlap === overlapTop) {
+                            car.y = building.y - carHitboxHeight/2;
+                        } else {
+                            car.y = building.y + building.height + carHitboxHeight/2;
+                        }
+                        
+                        // Reduce speed on collision
+                        car.velocity *= 0.3;
+                        car.lateralVelocity *= 0.3;
+                        
+                        // Collision feedback
+                        car.color = '#ff0000';
+                        setTimeout(() => { car.color = '#ff4444'; }, 200);
+                        
+                        // Add smoke for collision
+                        for (let j = 0; j < 5; j++) {
+                            car.smoke.push({
+                                x: car.x,
+                                y: car.y,
+                                size: Math.random() * 10 + 5,
+                                opacity: 0.8,
+                                life: 15
+                            });
+                        }
+                        
+                        // Cancel drift
+                        car.drifting = false;
+                        isDrifting = false;
+                        
+                        // Set collision flag to prevent multiple collisions
+                        car.colliding = true;
+                        setTimeout(() => { car.colliding = false; }, 100);
+                        break;
+                    }
+                }
+            }
+            
+            // Update smoke particles
+            for (let i = car.smoke.length - 1; i >= 0; i--) {
+                car.smoke[i].life--;
+                car.smoke[i].opacity -= 0.04;
+                car.smoke[i].size += 0.3;
+                
+                if (car.smoke[i].life <= 0 || car.smoke[i].opacity <= 0) {
+                    car.smoke.splice(i, 1);
+                }
+            }
+            
+            // Fade out tire tracks
+            for (let i = car.trail.length - 1; i >= 0; i--) {
+                car.trail[i].opacity -= 0.005;
+                
+                if (car.trail[i].opacity <= 0) {
+                    car.trail.splice(i, 1);
+                }
+            }
+        }
+        
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw city background
+            drawCity();
+            
+            // Draw tire tracks
+            drawTireTrack();
+            
+            // Draw car
+            drawCar();
+            
+            // Draw smoke particles
+            drawSmoke();
+        }
+        
+        function drawCity() {
+            // Draw city grid (roads)
+            ctx.fillStyle = '#333333';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw the road grid
+            ctx.fillStyle = '#222222';
+            
+            // Horizontal roads
+            for (let i = 1; i < 3; i++) {
+                ctx.fillRect(0, i * canvas.height / 3 - ROAD_WIDTH / 2, canvas.width, ROAD_WIDTH);
+            }
+            
+            // Vertical roads
+            for (let i = 1; i < 3; i++) {
+                ctx.fillRect(i * canvas.width / 3 - ROAD_WIDTH / 2, 0, ROAD_WIDTH, canvas.height);
+            }
+            
+            // Draw road markings
+            ctx.strokeStyle = '#ffffaa';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([15, 15]);
+            
+            // Horizontal road markings
+            for (let i = 1; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * canvas.height / 3);
+                ctx.lineTo(canvas.width, i * canvas.height / 3);
+                ctx.stroke();
+            }
+            
+            // Vertical road markings
+            for (let i = 1; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * canvas.width / 3, 0);
+                ctx.lineTo(i * canvas.width / 3, canvas.height);
+                ctx.stroke();
+            }
+            
+            ctx.setLineDash([]); // Reset dash
+            
+            // Draw buildings
+            for (let i = 0; i < buildings.length; i++) {
+                const building = buildings[i];
+                
+                // Building shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(
+                    building.x + 5, 
+                    building.y + 5, 
+                    building.width, 
+                    building.height
+                );
+                
+                // Main building
+                ctx.fillStyle = building.color;
+                ctx.fillRect(
+                    building.x, 
+                    building.y, 
+                    building.width, 
+                    building.height
+                );
+                
+                // Building windows
+                for (let j = 0; j < building.windows.length; j++) {
+                    const window = building.windows[j];
+                    ctx.fillStyle = window.lit ? '#ffffaa' : '#111111';
+                    ctx.fillRect(
+                        building.x + window.x - window.size/2,
+                        building.y + window.y - window.size/2,
+                        window.size, 
+                        window.size
+                    );
+                }
+            }
+        }
+        
+        function drawTireTrack() {
+            for (let i = 0; i < car.trail.length; i++) {
+                const track = car.trail[i];
+                ctx.fillStyle = `rgba(0, 0, 0, ${track.opacity})`;
+                ctx.beginPath();
+                ctx.arc(track.x, track.y, track.width, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        function drawCar() {
+            ctx.save();
+            
+            // Translate and rotate to car position
+            ctx.translate(car.x, car.y);
+            ctx.rotate(car.rotation);
+            
+            // Car shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.beginPath();
+            ctx.ellipse(2, 2, CAR_WIDTH * 0.6, CAR_HEIGHT * 0.65, 0, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Car body - more detailed shape
+            const carColor = car.color;
+            
+            // Main body - draw a car shape instead of a rectangle
+            ctx.beginPath();
+            
+            // Define car body shape points (sports car look)
+            const bodyPoints = [
+                {x: -CAR_WIDTH * 0.5, y: -CAR_HEIGHT * 0.3},  // Front left
+                {x: -CAR_WIDTH * 0.45, y: -CAR_HEIGHT * 0.45}, // Front left curve
+                {x: -CAR_WIDTH * 0.2, y: -CAR_HEIGHT * 0.5},  // Front hood left
+                {x: CAR_WIDTH * 0.2, y: -CAR_HEIGHT * 0.5},   // Front hood right
+                {x: CAR_WIDTH * 0.45, y: -CAR_HEIGHT * 0.45}, // Front right curve
+                {x: CAR_WIDTH * 0.5, y: -CAR_HEIGHT * 0.3},   // Front right
+                {x: CAR_WIDTH * 0.5, y: CAR_HEIGHT * 0.1},    // Side right
+                {x: CAR_WIDTH * 0.4, y: CAR_HEIGHT * 0.4},    // Rear right
+                {x: CAR_WIDTH * 0.2, y: CAR_HEIGHT * 0.5},    // Rear right corner
+                {x: -CAR_WIDTH * 0.2, y: CAR_HEIGHT * 0.5},   // Rear left corner
+                {x: -CAR_WIDTH * 0.4, y: CAR_HEIGHT * 0.4},   // Rear left
+                {x: -CAR_WIDTH * 0.5, y: CAR_HEIGHT * 0.1}    // Side left
+            ];
+            
+            // Draw the car body shape
+            ctx.beginPath();
+            ctx.moveTo(bodyPoints[0].x, bodyPoints[0].y);
+            for (let i = 1; i < bodyPoints.length; i++) {
+                ctx.lineTo(bodyPoints[i].x, bodyPoints[i].y);
+            }
+            ctx.closePath();
+            
+            // Create gradient for car body
+            const bodyGradient = ctx.createLinearGradient(-CAR_WIDTH * 0.5, 0, CAR_WIDTH * 0.5, 0);
+            // Parse the car color to get RGB values for creating highlights and shadows
+            const r = parseInt(carColor.slice(1, 3), 16);
+            const g = parseInt(carColor.slice(3, 5), 16);
+            const b = parseInt(carColor.slice(5, 7), 16);
+            
+            // Create darker and lighter versions of the car color for the gradient
+            const darkerColor = `rgb(${Math.max(0, r-40)}, ${Math.max(0, g-40)}, ${Math.max(0, b-40)})`;
+            const lighterColor = `rgb(${Math.min(255, r+40)}, ${Math.min(255, g+40)}, ${Math.min(255, b+40)})`;
+            
+            bodyGradient.addColorStop(0, darkerColor);
+            bodyGradient.addColorStop(0.5, carColor);
+            bodyGradient.addColorStop(1, lighterColor);
+            
+            ctx.fillStyle = bodyGradient;
+            ctx.fill();
+            
+            // Add a sleek outline
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Draw hood/engine detail
+            ctx.beginPath();
+            ctx.moveTo(-CAR_WIDTH * 0.2, -CAR_HEIGHT * 0.48);
+            ctx.lineTo(CAR_WIDTH * 0.2, -CAR_HEIGHT * 0.48);
+            ctx.lineTo(CAR_WIDTH * 0.15, -CAR_HEIGHT * 0.3);
+            ctx.lineTo(-CAR_WIDTH * 0.15, -CAR_HEIGHT * 0.3);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(30, 30, 30, 0.7)';
+            ctx.fill();
+            
+            // Draw windshield/glass area (cockpit)
+            ctx.beginPath();
+            ctx.moveTo(-CAR_WIDTH * 0.3, -CAR_HEIGHT * 0.1);
+            ctx.lineTo(-CAR_WIDTH * 0.2, -CAR_HEIGHT * 0.25);
+            ctx.lineTo(CAR_WIDTH * 0.2, -CAR_HEIGHT * 0.25);
+            ctx.lineTo(CAR_WIDTH * 0.3, -CAR_HEIGHT * 0.1);
+            ctx.lineTo(CAR_WIDTH * 0.3, CAR_HEIGHT * 0.1);
+            ctx.lineTo(-CAR_WIDTH * 0.3, CAR_HEIGHT * 0.1);
+            ctx.closePath();
+            
+            // Gradient for glass reflection
+            const glassGradient = ctx.createLinearGradient(0, -CAR_HEIGHT * 0.25, 0, CAR_HEIGHT * 0.1);
+            glassGradient.addColorStop(0, 'rgba(130, 190, 255, 0.9)');
+            glassGradient.addColorStop(0.5, 'rgba(170, 220, 255, 0.8)');
+            glassGradient.addColorStop(1, 'rgba(120, 180, 255, 0.85)');
+            ctx.fillStyle = glassGradient;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(40, 40, 40, 0.9)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Headlights
+            ctx.beginPath();
+            ctx.ellipse(-CAR_WIDTH * 0.3, -CAR_HEIGHT * 0.4, CAR_WIDTH * 0.1, CAR_HEIGHT * 0.06, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 200, 0.9)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(200, 200, 150, 0.9)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.ellipse(CAR_WIDTH * 0.3, -CAR_HEIGHT * 0.4, CAR_WIDTH * 0.1, CAR_HEIGHT * 0.06, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 200, 0.9)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(200, 200, 150, 0.9)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Taillights
+            ctx.beginPath();
+            ctx.ellipse(-CAR_WIDTH * 0.25, CAR_HEIGHT * 0.45, CAR_WIDTH * 0.08, CAR_HEIGHT * 0.04, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(220, 0, 0, 0.8)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(100, 0, 0, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.ellipse(CAR_WIDTH * 0.25, CAR_HEIGHT * 0.45, CAR_WIDTH * 0.08, CAR_HEIGHT * 0.04, 0, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(220, 0, 0, 0.8)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(100, 0, 0, 0.8)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // Wheels with realistic look
+            const drawWheel = (x, y, width, height) => {
+                // Wheel shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.beginPath();
+                ctx.ellipse(x + 1, y + 1, width, height, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Tire
+                ctx.fillStyle = '#222222';
+                ctx.beginPath();
+                ctx.ellipse(x, y, width, height, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Rim
+                ctx.fillStyle = '#dddddd';
+                ctx.beginPath();
+                ctx.ellipse(x, y, width * 0.6, height * 0.6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Center cap
+                ctx.fillStyle = '#999999';
+                ctx.beginPath();
+                ctx.ellipse(x, y, width * 0.2, height * 0.2, 0, 0, Math.PI * 2);
+                ctx.fill();
+            };
+            
+            // Draw all four wheels
+            drawWheel(-CAR_WIDTH * 0.35, -CAR_HEIGHT * 0.3, CAR_WIDTH * 0.12, CAR_HEIGHT * 0.08);
+            drawWheel(CAR_WIDTH * 0.35, -CAR_HEIGHT * 0.3, CAR_WIDTH * 0.12, CAR_HEIGHT * 0.08);
+            drawWheel(-CAR_WIDTH * 0.35, CAR_HEIGHT * 0.3, CAR_WIDTH * 0.12, CAR_HEIGHT * 0.08);
+            drawWheel(CAR_WIDTH * 0.35, CAR_HEIGHT * 0.3, CAR_WIDTH * 0.12, CAR_HEIGHT * 0.08);
+            
+            // Draw a drift indicator if drifting
+            if (car.drifting && car.velocity > 1) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                
+                // Draw drift lines based on drift factor
+                const driftAngle = car.lateralVelocity > 0 ? -Math.PI/4 : Math.PI/4;
+                const driftLength = 30 * car.driftFactor;
+                
+                ctx.beginPath();
+                ctx.moveTo(-CAR_WIDTH/2, CAR_HEIGHT/2);
+                ctx.lineTo(-CAR_WIDTH/2 + Math.cos(driftAngle) * driftLength, 
+                          CAR_HEIGHT/2 + Math.sin(driftAngle) * driftLength);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(CAR_WIDTH/2, CAR_HEIGHT/2);
+                ctx.lineTo(CAR_WIDTH/2 + Math.cos(driftAngle) * driftLength, 
+                          CAR_HEIGHT/2 + Math.sin(driftAngle) * driftLength);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawSmoke() {
+            for (let i = 0; i < car.smoke.length; i++) {
+                const smoke = car.smoke[i];
+                ctx.fillStyle = `rgba(220, 220, 220, ${smoke.opacity})`;
+                ctx.beginPath();
+                ctx.arc(smoke.x, smoke.y, smoke.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // Game initialization
+        function init() {
+            generateBuildings();
+            
+            // Start game loop
+            function gameLoop() {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+            
+            gameLoop();
+        }
+        
+        // Start the game
+        init();
+    </script>
 </body>
 </html>
